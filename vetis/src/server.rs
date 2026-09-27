@@ -270,6 +270,41 @@ pub mod http {
     use log::{debug, error, info};
     use std::net::SocketAddr;
 
+    /// Resolves the virtual host name for an incoming request.
+    ///
+    /// The authority is read from the request URI when present, which covers HTTP/2
+    /// (the `:authority` pseudo-header) and HTTP/1.1 requests sent with an
+    /// absolute-form request target. hyper 1.x parses an HTTP/1.1 origin-form target
+    /// (`GET /path HTTP/1.1`) into a [`http::Uri`] carrying only the path and query,
+    /// leaving the host in the `Host` header, so that header is used as a fallback.
+    ///
+    /// Both forms may include a port (`example.com:8080`) while virtual hosts are
+    /// keyed by bare host name, so the port is stripped before the name is returned.
+    ///
+    /// Returns [`None`] when neither source yields a usable host name.
+    pub fn resolve_hostname(uri: &http::Uri, headers: &http::HeaderMap) -> Option<String> {
+        let authority = uri
+            .authority()
+            .map(|authority| {
+                authority
+                    .as_str()
+                    .to_owned()
+            })
+            .or_else(|| {
+                headers
+                    .get(header::HOST)
+                    .and_then(|host| host.to_str().ok())
+                    .map(ToOwned::to_owned)
+            })?;
+
+        Some(match authority.parse::<http::uri::Authority>() {
+            Ok(authority) => authority
+                .host()
+                .to_owned(),
+            Err(_) => authority,
+        })
+    }
+
     /// HttpService is responsible for process HTTP1 and HTTP2 client requests
     pub struct HttpService<H> {
         hosts: VetisHosts<H>,
