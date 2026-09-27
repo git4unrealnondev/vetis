@@ -270,6 +270,42 @@ pub mod http {
     use log::{debug, error, info};
     use std::net::SocketAddr;
 
+    /// Resolves the virtual host name for an incoming request.
+    ///
+    /// The authority is read from the request URI when present, which covers HTTP/2
+    /// (the `:authority` pseudo-header) and HTTP/1.1 requests sent with an
+    /// absolute-form request target, and falls back to the `Host` header otherwise.
+    ///
+    /// Both forms may include a port (`example.com:8080`) while virtual hosts are
+    /// keyed by bare host name, so the port is stripped before the name is returned.
+    /// Without this, a client that sends a port — which is every client hitting a
+    /// non-default port — never matches a registered host and receives
+    /// `502 Bad Gateway: Host not found`.
+    ///
+    /// Returns [`None`] when neither source yields a usable host name.
+    pub fn resolve_hostname(uri: &http::Uri, headers: &http::HeaderMap) -> Option<String> {
+        let authority = uri
+            .authority()
+            .map(|authority| {
+                authority
+                    .as_str()
+                    .to_owned()
+            })
+            .or_else(|| {
+                headers
+                    .get(header::HOST)
+                    .and_then(|host| host.to_str().ok())
+                    .map(ToOwned::to_owned)
+            })?;
+
+        Some(match authority.parse::<http::uri::Authority>() {
+            Ok(authority) => authority
+                .host()
+                .to_owned(),
+            Err(_) => authority,
+        })
+    }
+
     /// HttpService is responsible for process HTTP1 and HTTP2 client requests
     pub struct HttpService<H> {
         hosts: VetisHosts<H>,
@@ -302,20 +338,8 @@ pub mod http {
                 .client_addr
                 .clone();
             let future = async move {
-                let Some(hostname) = req
-                    .uri()
-                    .authority()
-                    .map(|a| {
-                        a.as_str()
-                            .to_string()
-                    })
-                    .or_else(|| {
-                        req.headers()
-                            .get(header::HOST)
-                            .and_then(|h| h.to_str().ok())
-                            .map(|h| h.to_string())
-                    })
-                else {
+                let hostname = resolve_hostname(req.uri(), req.headers());
+                let Some(hostname) = hostname else {
                     error!("No hostname found in request");
                     let response = crate::Response::builder()
                         .status(StatusCode::BAD_REQUEST)
