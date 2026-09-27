@@ -216,11 +216,46 @@ impl ServerConfig {
 ///! HTTP module
 pub mod http {
     use crate::{errors::VetisError, host::Host, Request, VetisFutureResult, VetisHosts};
-    use http::{HeaderName, HeaderValue, StatusCode};
+    use http::{header, HeaderName, HeaderValue, StatusCode};
     use hyper::{body::Incoming, service::Service};
     use hyper_body_utils::HttpBody;
     use log::{debug, error, info};
     use std::net::SocketAddr;
+
+    /// Resolves the virtual host name for an incoming request.
+    ///
+    /// The authority is read from the request URI when present, which covers HTTP/2
+    /// (the `:authority` pseudo-header) and HTTP/1.1 requests sent with an
+    /// absolute-form request target. hyper 1.x parses an HTTP/1.1 origin-form target
+    /// (`GET /path HTTP/1.1`) into a [`http::Uri`] carrying only the path and query,
+    /// leaving the host in the `Host` header, so that header is used as a fallback.
+    ///
+    /// Both forms may include a port (`example.com:8080`) while virtual hosts are
+    /// keyed by bare host name, so the port is stripped before the name is returned.
+    ///
+    /// Returns [`None`] when neither source yields a usable host name.
+    pub fn resolve_hostname(uri: &http::Uri, headers: &http::HeaderMap) -> Option<String> {
+        let authority = uri
+            .authority()
+            .map(|authority| {
+                authority
+                    .as_str()
+                    .to_owned()
+            })
+            .or_else(|| {
+                headers
+                    .get(header::HOST)
+                    .and_then(|host| host.to_str().ok())
+                    .map(ToOwned::to_owned)
+            })?;
+
+        Some(match authority.parse::<http::uri::Authority>() {
+            Ok(authority) => authority
+                .host()
+                .to_owned(),
+            Err(_) => authority,
+        })
+    }
 
     /// HttpService is responsible for process HTTP1 and HTTP2 client requests
     pub struct HttpService<H> {
@@ -254,10 +289,7 @@ pub mod http {
                 .client_addr
                 .clone();
             let future = async move {
-                let Some(authority) = req
-                    .uri()
-                    .authority()
-                else {
+                let Some(hostname) = resolve_hostname(req.uri(), req.headers()) else {
                     error!("Host not found in request");
                     let response = crate::Response::builder()
                         .status(StatusCode::BAD_REQUEST)
@@ -266,12 +298,10 @@ pub mod http {
                     return Ok(response);
                 };
 
-                let hostname = authority.host();
-
                 debug!("Serving request for host: {}", hostname);
                 let hosts = hosts.read().await;
 
-                let host = hosts.get(hostname);
+                let host = hosts.get(hostname.as_str());
 
                 if let Some(host) = host {
                     // TODO: Save client_addr in request, grab url from request for logging
