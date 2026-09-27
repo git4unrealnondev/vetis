@@ -17,7 +17,7 @@ That's why VeTiS came to reality, by taking advantage of what I started on deboa
 ## Why VeTiS?
 
 - **Minimalist Design**: Focus on what matters - serving HTTP requests efficiently
-- **Flexible Runtime**: Choose between Tokio or Smol async runtimes
+- **Flexible Runtime**: Choose between Tokio, Compio, Glommio or Smol async runtimes
 - **Protocol Support**: Full HTTP/1, HTTP/2, and HTTP/3 implementation
 - **Secure by Default**: Built-in TLS support with modern cryptography
 - **Zero-Cost Abstractions**: Leverage Rust's performance without overhead
@@ -31,14 +31,8 @@ Add VeTiS to your `Cargo.toml`:
 vetis = { version = "0.1.0" }
 ```
 
-## Runtimes
-
-- [tokio](https://github.com/tokio-rs/tokio)
-- [smol](https://github.com/smol-rs/smol)
-
 ## Crate features
 
-- http1 (default)
 - http2
 - http3
 - rust-tls (default)
@@ -57,15 +51,16 @@ Here's how simple it is to create a web server with VeTiS:
 use http::Version;
 use hyper::StatusCode;
 use vetis::{
+    host::{handler_fn, HostConfig},
     listener::ListenerConfig,
     security::SecurityConfig,
-    server::{ServerConfig},
-    host::{handler_fn, HostConfig},
+    VetisServer as _,
 };
 use vetis_macros::status_pages;
 use vetis_tokio::{
-    host::{path::HandlerPath, HostImpl},
-    Vetis,
+    host::{path::HandlerPath, Host},
+    listener::build_listeners,
+    rt::Vetis,
 };
 
 pub(crate) const CA_CERT: &[u8] = include_bytes!("../../certs/ca.der");
@@ -78,12 +73,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let https = ListenerConfig::builder()
         .port(8443)
-        .protos(vec![Version::HTTP_11])
-        .interface("0.0.0.0")
-        .build()?;
-
-    let config = ServerConfig::builder()
-        .add_listener(https)
+        .protos(vec![Version::HTTP_11, Version::HTTP_3])
+        .interface(
+            "0.0.0.0"
+                .parse()
+                .unwrap(),
+        )
         .build()?;
 
     let security_config = SecurityConfig::builder()
@@ -95,14 +90,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let localhost_config = HostConfig::builder()
         .hostname("localhost")
         .security(security_config)
-        .root_directory("/home/rogerio/Downloads")
+        .root_directory("/home/rogerio/Downloads".into())
+        .header("alt-svc", "h3=:8443")
         .status_pages(status_pages! {
-            404 => "404.html".to_string(),
-            500 => "500.html".to_string(),
+            404 @ "404.html".to_string(),
+            500 @ "500.html".to_string()
         })
+        .bind_addresses(vec![(
+            "0.0.0.0"
+                .parse()
+                .unwrap(),
+            8443,
+        )])
         .build()?;
 
-    let mut localhost_host = HostImpl::new(localhost_config);
+    let mut localhost_host = Host::new(localhost_config);
 
     let root_path = HandlerPath::builder()
         .uri("/hello")
@@ -128,10 +130,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     localhost_host.add_path(health_path);
 
-    let mut server = Vetis::new(config);
-    server
-        .add_host(localhost_host)
-        .await;
+    let mut server = Vetis::builder()
+        .add_listeners(build_listeners(https))?
+        .add_host(localhost_host)?
+        .build();
 
     server.run().await?;
 
@@ -197,6 +199,14 @@ Reverse proxy support for VeTiS.
 ### [vetis-static](https://github.com/ararog/vetis/tree/main/vetis-static)
 
 Static files support for VeTiS.
+
+### [vetis-compio](https://github.com/ararog/vetis/tree/main/vetis-compio)
+
+Compio runtime for VeTiS.
+
+### [vetis-glommio](https://github.com/ararog/vetis/tree/main/vetis-glommio)
+
+Glommio runtime for VeTiS.
 
 ### [vetis-smol](https://github.com/ararog/vetis/tree/main/vetis-smol)
 

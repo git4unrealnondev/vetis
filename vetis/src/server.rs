@@ -95,16 +95,20 @@ impl ServerConfigBuilder {
             return Err(ConfigError::Server("No listeners configured".to_string()));
         }
 
+        if self
+            .hosts
+            .is_empty()
+        {
+            return Err(ConfigError::Server("No hosts configured".to_string()));
+        }
+
         let requires_tls = self
             .listeners
             .iter()
             .any(|listener| {
                 listener
                     .protos()
-                    .contains(&Version::HTTP_2)
-                    || listener
-                        .protos()
-                        .contains(&Version::HTTP_3)
+                    .contains(&Version::HTTP_3)
             });
 
         for host in &self.hosts {
@@ -113,7 +117,7 @@ impl ServerConfigBuilder {
                     .security()
                     .is_none()
             {
-                return Err(ConfigError::Server(format!("You enabled HTTP/2 and HTTP/3 support in your listeners, but your hosts doesnt't have TLS configuration provided.")));
+                return Err(ConfigError::Server(format!("You enabled HTTP/3 support in your listeners, but your hosts doesnt't have TLS configuration provided.")));
             }
         }
 
@@ -190,6 +194,28 @@ impl ServerConfig {
         &self.hosts
     }
 
+    /// Returns a mutable reference to all configured hosts.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vetis::{host::HostConfig, server::ServerConfig};
+    ///
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let config = ServerConfig::builder()
+    ///         .add_host(HostConfig::builder().hostname("example.com").build()?)
+    ///         .build()?;
+    ///
+    ///     for host in config.hosts() {
+    ///         println!("Hosting on port {}", host.hostname());
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn hosts_mut(&mut self) -> &mut Vec<HostConfig> {
+        &mut self.hosts
+    }
+
     /// Returns a reference to all configured listeners.
     ///
     /// # Examples
@@ -210,6 +236,28 @@ impl ServerConfig {
     /// ```
     pub fn listeners(&self) -> &Vec<ListenerConfig> {
         &self.listeners
+    }
+
+    /// Returns a mutable reference to all configured listeners.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vetis::{listener::ListenerConfig, server::ServerConfig};
+    ///
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let config = ServerConfig::builder()
+    ///         .add_listener(ListenerConfig::builder().port(80).build()?)
+    ///         .build()?;
+    ///
+    ///     for listener in config.listeners() {
+    ///         println!("Listening on port {}", listener.port());
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn listeners_mut(&mut self) -> &mut Vec<ListenerConfig> {
+        &mut self.listeners
     }
 }
 
@@ -289,20 +337,31 @@ pub mod http {
                 .client_addr
                 .clone();
             let future = async move {
-                let Some(hostname) = resolve_hostname(req.uri(), req.headers()) else {
-                    error!("Host not found in request");
+                let Some(hostname) = req
+                    .uri()
+                    .authority()
+                    .map(|a| {
+                        a.as_str()
+                            .to_string()
+                    })
+                    .or_else(|| {
+                        req.headers()
+                            .get(header::HOST)
+                            .and_then(|h| h.to_str().ok())
+                            .map(|h| h.to_string())
+                    })
+                else {
+                    error!("No hostname found in request");
                     let response = crate::Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .text("Host not found in request")
+                        .text("No hostname found in request")
                         .into_inner();
                     return Ok(response);
                 };
 
                 debug!("Serving request for host: {}", hostname);
-                let hosts = hosts.read().await;
-
-                let host = hosts.get(hostname.as_str());
-
+                let hosts = hosts.pin_owned();
+                let host = hosts.get(&hostname);
                 if let Some(host) = host {
                     // TODO: Save client_addr in request, grab url from request for logging
                     let (parts, body) = req.into_parts();

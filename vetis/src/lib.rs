@@ -1,7 +1,12 @@
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
-use async_lock::RwLock;
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
+use papaya::HashMap;
+use serde::Deserialize;
+use std::{future::Future, pin::Pin, sync::Arc};
+
+pub use base::VetisServer;
+pub use request::Request;
+pub use response::Response;
 
 /// Basic authentication module
 pub mod auth;
@@ -43,20 +48,6 @@ pub mod utils;
 /// ```
 pub type VetisResult<T> = Result<T, crate::errors::VetisError>;
 
-/// A type alias for a read-write lock wrapping a value
-///
-/// This is used for thread-safe shared mutable state.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use vetis::{VetisRwLock, VetisResult};
-/// use async_lock::RwLock;
-///
-/// let value: VetisRwLock<i32> = RwLock::new(42);
-/// ```
-pub type VetisRwLock<T> = RwLock<T>;
-
 /// A type alias for a vector of virtual hosts
 ///
 /// This is used to store virtual hosts in a map with hostname and port as the key.
@@ -64,14 +55,14 @@ pub type VetisRwLock<T> = RwLock<T>;
 /// # Examples
 ///
 /// ```rust,no_run
-/// use vetis::host::HostConfig;
-/// use vetis::{VetisHosts, VetisRwLock};
+/// use papaya::HashMap;
 /// use std::{sync::Arc, collections::HashMap};
+/// use vetis::{VetisHosts, host::HostConfig};
 ///
 /// let hosts: VetisHosts<HostConfig> =
-///     Arc::new(VetisRwLock::new(HashMap::new()));
+///     Arc::new(HashMap::new());
 /// ```
-pub type VetisHosts<T> = Arc<VetisRwLock<HashMap<Arc<str>, T>>>;
+pub type VetisHosts<T> = Arc<HashMap<String, Arc<T>>>;
 
 /// A pinned future that resolves to a result of type T or a VetisError
 ///
@@ -114,6 +105,71 @@ pub type VetisFutureResult<'a, T> = Pin<Box<dyn Future<Output = VetisResult<T>> 
 /// ```
 pub type HandlerFn = Box<dyn Fn(Request) -> VetisFutureResult<'static, Response> + Send + Sync>;
 
-pub use base::VetisServer;
-pub use request::Request;
-pub use response::Response;
+#[derive(Deserialize, Clone, PartialEq)]
+/// Enum for ALPN
+pub enum Alpn {
+    /// HTTP/1.1
+    Http11,
+    /// H2
+    H2,
+    /// H2C
+    H2c,
+    /// H3
+    H3,
+    /// DOT
+    Dot,
+    /// DOC
+    Doh,
+    /// DOQ
+    Doq,
+    /// ACME-TLS/1
+    AcmeTls1,
+}
+
+impl From<&str> for Alpn {
+    fn from(value: &str) -> Self {
+        let value = value.to_lowercase();
+        match value.as_str() {
+            "http/1.1" => Alpn::Http11,
+            "h2" => Alpn::H2,
+            "h2c" => Alpn::H2c,
+            "h3" => Alpn::H3,
+            "dot" => Alpn::Dot,
+            "doh" => Alpn::Doh,
+            "doq" => Alpn::Doq,
+            "acme-tls/1" => Alpn::AcmeTls1,
+            &_ => panic!("Not a valid ALPN protocol"),
+        }
+    }
+}
+
+impl From<Vec<u8>> for Alpn {
+    fn from(value: Vec<u8>) -> Self {
+        match value.as_slice() {
+            b"http/1.1" => Alpn::Http11,
+            b"h2" => Alpn::H2,
+            b"h2c" => Alpn::H2c,
+            b"h3" => Alpn::H3,
+            b"dot" => Alpn::Dot,
+            b"doh" => Alpn::Doh,
+            b"doq" => Alpn::Doq,
+            b"acme-tls/1" => Alpn::AcmeTls1,
+            &_ => panic!("Not a valid ALPN protocol"),
+        }
+    }
+}
+
+impl From<&Alpn> for Vec<u8> {
+    fn from(value: &Alpn) -> Self {
+        match value {
+            Alpn::Http11 => b"http/1.1".into(),
+            Alpn::H2 => b"h2".into(),
+            Alpn::H2c => b"h2c".into(),
+            Alpn::H3 => b"h3".into(),
+            Alpn::Dot => b"dot".into(),
+            Alpn::Doh => b"doh".into(),
+            Alpn::Doq => b"doq".into(),
+            Alpn::AcmeTls1 => b"acme-tls/1".into(),
+        }
+    }
+}

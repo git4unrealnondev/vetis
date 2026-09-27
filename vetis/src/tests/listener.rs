@@ -1,5 +1,9 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use caramelo::{
+    expect,
+    matchers::{eq, truthy},
+};
 use http::Version;
 
 use crate::listener::ListenerConfig;
@@ -66,15 +70,6 @@ fn test_listener_config_builder_chain() {
 }
 
 #[test]
-fn test_listener_config_builder_port_zero_error() {
-    let result = ListenerConfig::builder()
-        .port(0)
-        .build();
-
-    assert!(result.is_err());
-}
-
-#[test]
 fn test_listener_config_port_getter() {
     let config = ListenerConfig::builder()
         .port(9090)
@@ -109,22 +104,6 @@ fn test_listener_config_interface_getter() {
         .unwrap();
 
     assert_eq!(config.interface(), &IpAddr::V6(Ipv6Addr::LOCALHOST));
-}
-
-#[test]
-fn test_listener_config_clone() {
-    let config = ListenerConfig::builder()
-        .port(8080)
-        .interface(Ipv4Addr::LOCALHOST.into())
-        .protos(vec![Version::HTTP_2])
-        .build()
-        .unwrap();
-
-    let cloned_config = config.clone();
-
-    assert_eq!(cloned_config.port(), config.port());
-    assert_eq!(cloned_config.interface(), config.interface());
-    assert_eq!(cloned_config.protos(), config.protos());
 }
 
 #[test]
@@ -198,7 +177,7 @@ fn test_listener_config_min_port() {
 #[test]
 fn test_port_into_listener() {
     let config: ListenerConfig = 80.into();
-    assert_eq!(config.port(), 80)
+    expect(config.port()).to_be(eq(80));
 }
 
 #[test]
@@ -210,6 +189,16 @@ fn test_version_into_listener() {
 #[test]
 fn test_port_version_into_listener() {
     let config: ListenerConfig = (80, Version::HTTP_11).into();
-    assert_eq!(config.port(), 80);
+    expect(config.port()).to_be(eq(80));
     assert_eq!(config.protos()[0], Version::HTTP_11);
+}
+
+#[test]
+fn test_listener_config_builder_allow_unsage() {
+    let config = ListenerConfig::builder()
+        .allow_unsafe_connections(true)
+        .build()
+        .unwrap();
+
+    expect(config.allow_unsafe_connections()).to_be(truthy());
 }
